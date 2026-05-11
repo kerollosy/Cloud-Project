@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <title>resumes</title>
+    <link rel="stylesheet" href="/static/style.css"> 
+    <style>
+        /* توسيط العنوان */
+        h1 { 
+            text-align: center; 
+            margin: 20px 0; 
+            color: #333;
+        }
+        
+        table { width: 90%; border-collapse: collapse; margin: 20px auto; }
+        th, td { border: 1px solid #ddd; padding: 12px; text-align: right; }
+        th { background-color: #f4f4f4; }
+        tr:nth-child(even) { background-color: #fafafa; }
+
+        /* ستايل الزرار وتوسيطه */
+        .container {
+            text-align: center;
+            margin-top: 30px;
+            margin-bottom: 50px;
+        }
+        .back-btn {
+            background-color: #007bff;
+            color: white;
+            padding: 10px 20px;
+            text-decoration: none;
+            border-radius: 5px;
+            font-family: sans-serif;
+            transition: background-color 0.3s;
+        }
+        .back-btn:hover {
+            background-color: #0056b3;
+        }
+    </style>
+</head>
+<body>
+    <h1>All Resumes</h1>
+    
+    <table id="resumesTable">
+        <thead>
+            <tr>
+                <th>Name</th>
+                <th>E-mail</th>
+                <th>Education</th>
+                <th>Skills</th>
+            </tr>
+        </thead>
+        <tbody id="tableBody">
+        </tbody>
+    </table>
+
+    <div class="container">
+        <a href="/" class="back-btn"> home </a>
+    </div>
+
+    <script>
+        async function loadResumes() {
+            try {
+                const response = await fetch('/api/v1/resumes');
+                const data = await response.json();
+                
+                const tableBody = document.getElementById('tableBody');
+                tableBody.innerHTML = '';
+
+                data.forEach(resume => {
+                    const row = `
+                        <tr>
+                            <td>${resume.name || 'not found'}</td>
+                            <td>${resume.email || 'not found'}</td>
+                            <td>${resume.education || 'not found'}</td>
+                            <td>${resume.skills && resume.skills.length > 0 ? resume.skills.join(', ') : 'not found'}</td>
+                        </tr>
+                    `;
+                    tableBody.innerHTML += row;
+                });
+            } catch (error) {
+                console.error('Can not get data', error);
+            }
+        }
+
+        window.onload = loadResumes;
+    </script>
+</body>
+</html>
