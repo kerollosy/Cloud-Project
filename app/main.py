@@ -3,6 +3,8 @@ import logging
 import re
 from contextlib import asynccontextmanager
 
+import boto3
+import watchtower
 from dotenv import load_dotenv
 
 logging.basicConfig(
@@ -17,6 +19,7 @@ from app.db_models import ResumeDocument
 from app.database import init_db
 from app.utils.parser import extract_text_from_pdf, extract_text_from_txt
 from app.utils.ai_extractor import load_model, unload_model, extract_fields
+from app.utils.s3_helper import upload_file_to_s3
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse
@@ -26,15 +29,13 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-AWS_ACCESS_KEY = os.getenv("AWS_ACCESS_KEY_ID")
-AWS_SECRET_KEY = os.getenv("AWS_SECRET_ACCESS_KEY")
 AWS_REGION = os.getenv("AWS_REGION")
 S3_BUCKET_NAME = os.getenv("S3_BUCKET_NAME")
 
 MONGO_URL = os.getenv("MONGO_URL")
 DATABASE_NAME = os.getenv("DATABASE_NAME")
 
-MAX_UPLOAD_SIZE_MB = int(os.getenv("MAX_UPLOAD_SIZE_MB", "10"))
+MAX_UPLOAD_SIZE_MB = 10
 MAX_UPLOAD_SIZE_BYTES = MAX_UPLOAD_SIZE_MB * 1024 * 1024
 
 
@@ -48,8 +49,8 @@ def _normalize_email(value: str | None) -> str | None:
         return cleaned
     return None
 
-if not all([AWS_ACCESS_KEY, AWS_SECRET_KEY, AWS_REGION, S3_BUCKET_NAME]):
-    logger.warning("Missing AWS credentials - S3 features will be unavailable")
+if not all([AWS_REGION, S3_BUCKET_NAME]):
+    logger.warning("Missing AWS S3 configuration - S3 features will be unavailable")
 
 if not all([MONGO_URL, DATABASE_NAME]):
     logger.warning("Missing MongoDB configuration - DB persistence disabled")
@@ -60,7 +61,18 @@ if not all([MONGO_URL, DATABASE_NAME]):
 # ---------------------------------------------------------------------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Load the AI model into memory when the server starts."""
+    try:
+        cw_handler = watchtower.CloudWatchLogHandler(
+            log_group="ResumeAPI-Production",
+            boto3_client=boto3.client("logs", region_name=AWS_REGION)
+        )
+        logger.addHandler(cw_handler)
+        logging.getLogger("uvicorn.access").addHandler(cw_handler)
+        logging.getLogger("uvicorn.error").addHandler(cw_handler)
+        logger.info("CloudWatch Logging successfully initialized.")
+    except Exception as e:
+        logger.warning(f"Could not initialize CloudWatch logging: {e}")
+
     logger.info("Starting up – loading AI model ...")
     load_model()
     await init_db()
@@ -106,6 +118,7 @@ async def get_all_resumes():
         
         logger.warning("Failed to retrieve resumes from MongoDB.")
         raise HTTPException(status_code=503, detail="Database unavailable")
+
 @app.get("/view-resumes", response_class=HTMLResponse)
 async def view_resumes_page(request: Request):
   
@@ -140,9 +153,9 @@ async def extract_resume(file: UploadFile = File(...)):
         )
 
     try:
-        # s3_path = upload_file_to_s3(file_bytes, file.filename)
-        # NOTE: keep this line commented out until we add aws s3 for deployment.
-
+        s3_path = upload_file_to_s3(file_bytes, file.filename)
+        logger.info(f"File securely backed up to {s3_path}")
+        
         # Step 1: Extract raw text from the file
         if is_pdf:
             parsed_text = await extract_text_from_pdf(file_bytes)
