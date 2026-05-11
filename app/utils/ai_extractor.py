@@ -108,37 +108,39 @@ def unload_model() -> None:
     logger.info("Model unloaded.")
 
 
-def _predict_entities(text: str) -> List[Tuple[str, int, int, str]]:
+def _predict_entities(text: str) -> List[Tuple[str, int, int, str, float]]:
     raw: List[dict] = _holder.ner_pipeline(
         text,
         stride=STRIDE,
     )
 
-    entities: List[Tuple[str, int, int, str]] = []
+    entities: List[Tuple[str, int, int, str, float]] = []
     for ent in raw:
         entity_type = ent["entity_group"]
         start: int = ent["start"]
         end: int   = ent["end"]
         span: str  = text[start:end].strip()
+        score: float = ent.get("score", 0.0)
         if span:
-            entities.append((entity_type, start, end, span))
+            entities.append((entity_type, start, end, span, score))
 
     return entities
 
 
-def _merge_contiguous(entities: List[Tuple[str, int, int, str]],
-                    text: str) -> List[Tuple[str, int, int, str]]:
+def _merge_contiguous(entities: List[Tuple[str, int, int, str, float]],
+                    text: str) -> List[Tuple[str, int, int, str, float]]:
     if not entities:
         return entities
     entities = sorted(entities, key=lambda x: x[1])
     merged = [entities[0]]
-    for typ, s, e, span in entities[1:]:
-        ptyp, ps, pe, pspan = merged[-1]
+    for typ, s, e, span, score in entities[1:]:
+        ptyp, ps, pe, pspan, pscore = merged[-1]
         gap = text[pe:s]
         if typ == ptyp and gap.strip() == "" and len(gap) <= 3:
-            merged[-1] = (typ, ps, e, text[ps:e].strip())
+            merged_score = (pscore + score) / 2.0  # Average score for merged entities
+            merged[-1] = (typ, ps, e, text[ps:e].strip(), merged_score)
         else:
-            merged.append((typ, s, e, span))
+            merged.append((typ, s, e, span, score))
     return merged
 
 
@@ -164,24 +166,27 @@ def _extract_skills_from_taxonomy(text: str) -> List[str]:
             else canon_map.get(k, v) for k, v in found.items()]
 
 
-async def extract_fields(resume_text: str) -> Dict[str, str]:
+async def extract_fields(resume_text: str) -> dict:
     if _holder.ner_pipeline is None:
         raise RuntimeError("Model is not loaded. Call load_model() at startup.")
 
     # Normalize away surrogate / weird Unicode that breaks tokenizers
     resume_text = resume_text.encode("utf-8", errors="ignore").decode("utf-8")
 
-    def _run() -> Dict[str, str]:
+    def _run() -> dict:
         raw = _predict_entities(resume_text)
-        # print("Raw model output:", raw)
         raw = _merge_contiguous(raw, resume_text)
 
+        # Track scores for confidence calculation
+        scores_by_type: Dict[str, List[float]] = {"Name": [], "Email Address": [], "Education": []}
         buckets: Dict[str, List[str]] = {v: [] for v in ENTITY_TO_FIELD.values()}
-        for typ, _s, _e, span in raw:
+        
+        for typ, _s, _e, span, score in raw:
             field = ENTITY_TO_FIELD.get(typ)
             if not field:
                 continue
             buckets[field].append(span)
+            scores_by_type[field].append(score)
 
         for k in buckets:
             buckets[k] = _dedupe(buckets[k])
@@ -192,17 +197,33 @@ async def extract_fields(resume_text: str) -> Dict[str, str]:
 
         skills = _extract_skills_from_taxonomy(resume_text)
 
+        # Calculate confidence scores for each field
+        name_conf = sum(scores_by_type["Name"]) / len(scores_by_type["Name"]) if scores_by_type["Name"] else 0.0
+        email_conf = sum(scores_by_type["Email Address"]) / len(scores_by_type["Email Address"]) if scores_by_type["Email Address"] else 0.5  # Regex is decent
+        edu_conf = sum(scores_by_type["Education"]) / len(scores_by_type["Education"]) if scores_by_type["Education"] else 0.0
+        skills_conf = 0.85  # Skills from taxonomy are fairly reliable
+        
+        # Overall confidence is weighted average
+        overall_conf = (name_conf * 0.25 + email_conf * 0.25 + edu_conf * 0.25 + skills_conf * 0.25)
+
         result = {
             "Name": buckets["Name"][0] if buckets["Name"] else "",
             "Email Address": buckets["Email Address"][0] if buckets["Email Address"] else "",
             "Skills": ", ".join(skills),
             "Education": "; ".join(buckets["Education"]),
+            "confidence": {
+                "name": round(name_conf, 3),
+                "email": round(email_conf, 3),
+                "education": round(edu_conf, 3),
+                "skills": round(skills_conf, 3),
+                "overall": round(overall_conf, 3),
+            }
         }
 
         logger.debug(
-            "Extracted: name=%r email=%r #skills=%d #edu=%d",
+            "Extracted: name=%r email=%r #skills=%d #edu=%d (overall confidence: %.2f)",
             result["Name"], result["Email Address"],
-            len(skills), len(buckets["Education"]),
+            len(skills), len(buckets["Education"]), overall_conf,
         )
         return result
 

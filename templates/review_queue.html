@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Review Queue - Resume Extraction</title>
+    <link rel="stylesheet" href="{{ url_for('static', path='/css/style.css') }}">
+    <style>
+        .review-container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .review-card {
+            border: 1px solid #ddd;
+            padding: 20px;
+            margin: 15px 0;
+            border-radius: 8px;
+            background: #f9f9f9;
+        }
+        .confidence-badge {
+            display: inline-block;
+            padding: 5px 10px;
+            border-radius: 4px;
+            font-size: 0.9em;
+            font-weight: bold;
+            margin-left: 10px;
+        }
+        .confidence-low {
+            background: #ffcccc;
+            color: #cc0000;
+        }
+        .confidence-medium {
+            background: #ffffcc;
+            color: #cc9900;
+        }
+        .status-badge {
+            display: inline-block;
+            padding: 5px 10px;
+            border-radius: 4px;
+            font-size: 0.85em;
+            background: #e3f2fd;
+            color: #1976d2;
+            margin-left: 10px;
+        }
+        .field-row {
+            margin: 10px 0;
+            padding: 10px;
+            background: white;
+            border-left: 3px solid #2196F3;
+        }
+        .field-label {
+            font-weight: bold;
+            color: #555;
+            font-size: 0.9em;
+            text-transform: uppercase;
+        }
+        .field-value {
+            font-size: 1em;
+            margin-top: 5px;
+            color: #333;
+        }
+        .confidence-detail {
+            font-size: 0.8em;
+            color: #999;
+            margin-top: 3px;
+        }
+        .action-buttons {
+            margin-top: 15px;
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.95em;
+            transition: all 0.3s;
+        }
+        .btn-approve {
+            background: #4CAF50;
+            color: white;
+        }
+        .btn-approve:hover {
+            background: #45a049;
+        }
+        .btn-reject {
+            background: #f44336;
+            color: white;
+        }
+        .btn-reject:hover {
+            background: #da190b;
+        }
+        .btn-edit {
+            background: #2196F3;
+            color: white;
+        }
+        .btn-edit:hover {
+            background: #0b7dda;
+        }
+        .edit-form {
+            background: #f0f0f0;
+            padding: 15px;
+            border-radius: 4px;
+            margin-top: 15px;
+            display: none;
+        }
+        .form-group {
+            margin: 10px 0;
+        }
+        .form-group label {
+            display: block;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+        .form-group input,
+        .form-group textarea {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        .audit-trail {
+            margin-top: 15px;
+            padding: 10px;
+            background: #f5f5f5;
+            border-radius: 4px;
+            font-size: 0.85em;
+        }
+        .audit-entry {
+            margin: 5px 0;
+            padding: 5px;
+            border-left: 2px solid #2196F3;
+            padding-left: 10px;
+        }
+        .empty-state {
+            text-align: center;
+            padding: 40px;
+            color: #999;
+        }
+        .empty-state h3 {
+            color: #666;
+        }
+        #loading {
+            text-align: center;
+            padding: 20px;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="review-container">
+        <h1>📋 Review Queue</h1>
+        <p>Resumes flagged for human review due to low extraction confidence</p>
+        
+        <div id="loading">Loading pending reviews...</div>
+        <div id="reviews-list"></div>
+    </div>
+
+    <script>
+        const CONFIDENCE_THRESHOLD = 0.75;
+
+        async function loadReviews() {
+            try {
+                const response = await fetch('/api/v1/reviews');
+                if (!response.ok) throw new Error('Failed to load reviews');
+                
+                const reviews = await response.json();
+                displayReviews(reviews);
+            } catch (error) {
+                console.error('Error loading reviews:', error);
+                document.getElementById('loading').innerHTML = 
+                    '<p style="color: red;">Error loading reviews. Make sure the server is running.</p>';
+            }
+        }
+
+        function displayReviews(reviews) {
+            const container = document.getElementById('reviews-list');
+            document.getElementById('loading').style.display = 'none';
+            
+            if (!reviews || reviews.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <h3>✅ All Clear!</h3>
+                        <p>No resumes pending review. All extractions have high confidence.</p>
+                    </div>
+                `;
+                return;
+            }
+
+            container.innerHTML = reviews.map(doc => createReviewCard(doc)).join('');
+            
+            // Attach event listeners
+            reviews.forEach(doc => {
+                document.getElementById(`edit-btn-${doc._id}`).addEventListener('click', 
+                    () => toggleEditForm(doc._id));
+                document.getElementById(`approve-btn-${doc._id}`).addEventListener('click', 
+                    () => handleApprove(doc._id));
+                document.getElementById(`reject-btn-${doc._id}`).addEventListener('click', 
+                    () => handleReject(doc._id));
+            });
+        }
+
+        function createReviewCard(doc) {
+            const conf = doc.confidence || {};
+            const overallConf = (conf.overall || 0) * 100;
+            const confClass = overallConf >= 60 ? 'confidence-medium' : 'confidence-low';
+            
+            const auditHtml = (doc.audit_trail || []).map(entry => `
+                <div class="audit-entry">
+                    <strong>${entry.action}</strong> - ${new Date(entry.timestamp).toLocaleString()}
+                    ${entry.notes ? `<br/><em>${entry.notes}</em>` : ''}
+                </div>
+            `).join('');
+
+            return `
+                <div class="review-card">
+                    <div style="display: flex; justify-content: space-between; align-items: start;">
+                        <div>
+                            <h3>${doc.name || '(No Name)'}</h3>
+                            <span class="confidence-badge ${confClass}">
+                                Confidence: ${overallConf.toFixed(0)}%
+                            </span>
+                            <span class="status-badge">${doc.status}</span>
+                        </div>
+                    </div>
+
+                    <div class="field-row">
+                        <div class="field-label">📧 Email Address</div>
+                        <div class="field-value">${doc.email || '(Not extracted)'}</div>
+                        <div class="confidence-detail">Confidence: ${((conf.email || 0) * 100).toFixed(0)}%</div>
+                    </div>
+
+                    <div class="field-row">
+                        <div class="field-label">🎓 Education</div>
+                        <div class="field-value">${doc.education || '(Not extracted)'}</div>
+                        <div class="confidence-detail">Confidence: ${((conf.education || 0) * 100).toFixed(0)}%</div>
+                    </div>
+
+                    <div class="field-row">
+                        <div class="field-label">💼 Skills</div>
+                        <div class="field-value">${(doc.skills || []).join(', ') || '(No skills extracted)'}</div>
+                        <div class="confidence-detail">Confidence: ${((conf.skills || 0) * 100).toFixed(0)}%</div>
+                    </div>
+
+                    <div class="action-buttons">
+                        <button class="btn btn-approve" id="approve-btn-${doc._id}">✓ Approve</button>
+                        <button class="btn btn-reject" id="reject-btn-${doc._id}">✗ Reject</button>
+                        <button class="btn btn-edit" id="edit-btn-${doc._id}">✎ Edit & Approve</button>
+                    </div>
+
+                    <div class="edit-form" id="edit-form-${doc._id}">
+                        <h4>Make Corrections:</h4>
+                        <div class="form-group">
+                            <label>Name:</label>
+                            <input type="text" id="edit-name-${doc._id}" value="${doc.name || ''}" placeholder="Enter name">
+                        </div>
+                        <div class="form-group">
+                            <label>Email:</label>
+                            <input type="email" id="edit-email-${doc._id}" value="${doc.email || ''}" placeholder="Enter email">
+                        </div>
+                        <div class="form-group">
+                            <label>Skills (comma-separated):</label>
+                            <input type="text" id="edit-skills-${doc._id}" value="${(doc.skills || []).join(', ')}" placeholder="e.g., Python, React, Docker">
+                        </div>
+                        <div class="form-group">
+                            <label>Education:</label>
+                            <textarea id="edit-education-${doc._id}" placeholder="Enter education details">${doc.education || ''}</textarea>
+                        </div>
+                        <button class="btn btn-approve" onclick="submitCorrectedApproval('${doc._id}')">✓ Approve with Corrections</button>
+                        <button class="btn btn-edit" onclick="toggleEditForm('${doc._id}')" style="background: #999;">Cancel</button>
+                    </div>
+
+                    <div class="audit-trail">
+                        <strong>Audit Trail:</strong>
+                        ${auditHtml || '<em>No audit entries yet</em>'}
+                    </div>
+                </div>
+            `;
+        }
+
+        function toggleEditForm(docId) {
+            const form = document.getElementById(`edit-form-${docId}`);
+            form.style.display = form.style.display === 'none' ? 'block' : 'none';
+        }
+
+        async function handleApprove(docId) {
+            if (!confirm('Approve this resume without corrections?')) return;
+            
+            try {
+                const response = await fetch(`/api/v1/reviews/${docId}/approve`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                
+                if (!response.ok) throw new Error('Approval failed');
+                alert('✓ Approved! Reloading...');
+                loadReviews();
+            } catch (error) {
+                alert('Error approving: ' + error.message);
+            }
+        }
+
+        async function submitCorrectedApproval(docId) {
+            const name = document.getElementById(`edit-name-${docId}`).value;
+            const email = document.getElementById(`edit-email-${docId}`).value;
+            const skills = document.getElementById(`edit-skills-${docId}`).value
+                .split(',').map(s => s.trim()).filter(s => s);
+            const education = document.getElementById(`edit-education-${docId}`).value;
+
+            try {
+                const params = new URLSearchParams({
+                    name: name,
+                    email: email,
+                    skills: JSON.stringify(skills),
+                    education: education
+                });
+
+                const response = await fetch(`/api/v1/reviews/${docId}/approve?${params}`, {
+                    method: 'POST'
+                });
+                
+                if (!response.ok) throw new Error('Approval failed');
+                alert('✓ Approved with corrections! Reloading...');
+                loadReviews();
+            } catch (error) {
+                alert('Error approving: ' + error.message);
+            }
+        }
+
+        async function handleReject(docId) {
+            const reason = prompt('Why are you rejecting this? (optional):', '');
+            if (reason === null) return; // Cancelled
+            
+            try {
+                const params = new URLSearchParams({ reason: reason });
+                const response = await fetch(`/api/v1/reviews/${docId}/reject?${params}`, {
+                    method: 'POST'
+                });
+                
+                if (!response.ok) throw new Error('Rejection failed');
+                alert('✗ Rejected! Reloading...');
+                loadReviews();
+            } catch (error) {
+                alert('Error rejecting: ' + error.message);
+            }
+        }
+
+        // Load reviews on page load
+        loadReviews();
+        
+        // Refresh every 30 seconds
+        setInterval(loadReviews, 30000);
+    </script>
+</body>
+</html>

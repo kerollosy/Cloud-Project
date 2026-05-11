@@ -2,6 +2,7 @@ import os
 import logging
 import re
 from contextlib import asynccontextmanager
+from datetime import datetime
 
 import boto3
 import watchtower
@@ -15,7 +16,7 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.models import ExtractionResponse, ResumeData
-from app.db_models import ResumeDocument
+from app.db_models import ResumeDocument, ReviewStatus, AuditAction, ConfidenceScores
 from app.database import init_db
 from app.utils.parser import extract_text_from_pdf, extract_text_from_txt
 from app.utils.ai_extractor import load_model, unload_model, extract_fields
@@ -37,6 +38,7 @@ DATABASE_NAME = os.getenv("DATABASE_NAME")
 
 MAX_UPLOAD_SIZE_MB = 10
 MAX_UPLOAD_SIZE_BYTES = MAX_UPLOAD_SIZE_MB * 1024 * 1024
+CONFIDENCE_THRESHOLD = 0.75  # Threshold for auto-approval
 
 
 def _normalize_email(value: str | None) -> str | None:
@@ -169,6 +171,12 @@ async def extract_resume(file: UploadFile = File(...)):
             (education_raw if isinstance(education_raw, list) else [])
         )
 
+        # Extract confidence scores
+        confidence_data = extracted.get("confidence", {
+            "name": 0.0, "email": 0.0, "education": 0.0, "skills": 0.85, "overall": 0.21
+        })
+        overall_confidence = confidence_data.get("overall", 0.0)
+
         resume_data = ResumeData(
             name=extracted.get("Name", ""),
             email=_normalize_email(extracted.get("Email Address")),
@@ -176,23 +184,49 @@ async def extract_resume(file: UploadFile = File(...)):
             education=education_list,
         )
 
+        # Determine status based on confidence threshold
+        status = ReviewStatus.AUTO_APPROVED if overall_confidence >= CONFIDENCE_THRESHOLD else ReviewStatus.PENDING_REVIEW
+        action = AuditAction.AUTO_APPROVED if status == ReviewStatus.AUTO_APPROVED else AuditAction.FLAGGED_FOR_REVIEW
+
         education_str = "; ".join(education_list) if education_list else ""
         try:
+            # Create confidence scores object
+            conf_obj = ConfidenceScores()
+            conf_obj.name = confidence_data.get("name", 0.0)
+            conf_obj.email = confidence_data.get("email", 0.0)
+            conf_obj.education = confidence_data.get("education", 0.0)
+            conf_obj.skills = confidence_data.get("skills", 0.85)
+            conf_obj.overall = confidence_data.get("overall", 0.0)
+
+            # Create audit trail entry
+            audit_entry = {
+                "action": action.value,
+                "timestamp": datetime.utcnow().isoformat(),
+                "confidence": overall_confidence,
+                "notes": f"Auto-extracted from {file.filename}"
+            }
+
             doc = ResumeDocument(
                 name=resume_data.name,
                 email=resume_data.email,
                 education=education_str,
                 skills=resume_data.skills,
+                status=status.value,
+                confidence=conf_obj.dict(),
+                audit_trail=[audit_entry],
             )
             await doc.insert()
-            logger.info("Persisted extraction result to MongoDB: %s", doc.id)
+            logger.info(
+                "Persisted extraction result to MongoDB: %s (status=%s, confidence=%.2f)",
+                doc.id, status.value, overall_confidence
+            )
         except Exception:
            
             logger.warning("Failed to persist extraction result to MongoDB.")
 
         return ExtractionResponse(
             status="success",
-            message=f"Successfully extracted data from {file.filename}.",
+            message=f"Successfully extracted data from {file.filename}. Status: {status.value} (Confidence: {overall_confidence:.2%})",
             data=resume_data,
         )
 
@@ -203,6 +237,109 @@ async def extract_resume(file: UploadFile = File(...)):
     except Exception as e:
         logger.exception("Unexpected error during extraction.")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/v1/reviews")
+async def get_pending_reviews():
+    """Get all documents pending human review."""
+    try:
+        pending = await ResumeDocument.find({"status": ReviewStatus.PENDING_REVIEW.value}).to_list()
+        return pending
+    except Exception:
+        logger.warning("Failed to retrieve pending reviews from MongoDB.")
+        raise HTTPException(status_code=503, detail="Database unavailable")
+
+
+@app.get("/api/v1/reviews/{doc_id}")
+async def get_review(doc_id: str):
+    """Get a specific review by document ID."""
+    try:
+        from bson import ObjectId
+        doc = await ResumeDocument.get(ObjectId(doc_id))
+        if not doc:
+            raise HTTPException(status_code=404, detail="Document not found")
+        return doc
+    except Exception as e:
+        logger.warning(f"Failed to retrieve review {doc_id}: {e}")
+        raise HTTPException(status_code=503, detail="Database error")
+
+
+@app.post("/api/v1/reviews/{doc_id}/approve")
+async def approve_review(doc_id: str, name: str = None, email: str = None, skills: list = None, education: str = None):
+    """Approve a review with optional corrections."""
+    try:
+        from bson import ObjectId
+        doc = await ResumeDocument.get(ObjectId(doc_id))
+        if not doc:
+            raise HTTPException(status_code=404, detail="Document not found")
+        
+        # Apply corrections if provided
+        if name:
+            doc.name = name
+        if email:
+            doc.email = _normalize_email(email)
+        if skills:
+            doc.skills = skills
+        if education:
+            doc.education = education
+        
+        # Mark as reviewed
+        doc.status = ReviewStatus.REVIEWED.value
+        
+        # Add audit entry
+        audit_entry = {
+            "action": AuditAction.APPROVED_BY_HUMAN.value,
+            "timestamp": datetime.utcnow().isoformat(),
+            "notes": "Human review approved" + (" with corrections" if any([name, email, skills, education]) else "")
+        }
+        doc.audit_trail.append(audit_entry)
+        
+        await doc.save()
+        logger.info(f"Document {doc_id} approved by human review")
+        return {"status": "approved", "doc_id": str(doc.id)}
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Error approving review {doc_id}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/v1/reviews/{doc_id}/reject")
+async def reject_review(doc_id: str, reason: str = ""):
+    """Reject a review and flag for manual inspection."""
+    try:
+        from bson import ObjectId
+        doc = await ResumeDocument.get(ObjectId(doc_id))
+        if not doc:
+            raise HTTPException(status_code=404, detail="Document not found")
+        
+        # Keep status as PENDING_REVIEW but add rejection note
+        audit_entry = {
+            "action": AuditAction.REJECTED.value,
+            "timestamp": datetime.utcnow().isoformat(),
+            "notes": reason or "Rejected - needs manual inspection"
+        }
+        doc.audit_trail.append(audit_entry)
+        
+        await doc.save()
+        logger.info(f"Document {doc_id} rejected: {reason}")
+        return {"status": "rejected", "doc_id": str(doc.id), "reason": reason}
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Error rejecting review {doc_id}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/review-queue", response_class=HTMLResponse)
+async def review_queue_page(request: Request):
+    """Serve the review queue UI page."""
+    return templates.TemplateResponse(
+        request=request,
+        name="review_queue.html"
+    )
 
 
 if __name__ == "__main__":
