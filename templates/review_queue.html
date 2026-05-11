@@ -6,17 +6,36 @@
     <title>Review Queue - Resume Extraction</title>
     <link rel="stylesheet" href="{{ url_for('static', path='/css/style.css') }}">
     <style>
+        body {
+            background-color: #f5f5f5;
+            color: #333;
+            font-family: Arial, sans-serif;
+        }
         .review-container {
             max-width: 1200px;
             margin: 0 auto;
             padding: 20px;
+            color: #333;
+        }
+        .review-container h1 {
+            color: #333;
+            text-align: center;
+        }
+        .review-container p {
+            color: #666;
+            text-align: center;
         }
         .review-card {
             border: 1px solid #ddd;
             padding: 20px;
             margin: 15px 0;
             border-radius: 8px;
-            background: #f9f9f9;
+            background: #fff;
+            color: #333;
+        }
+        .review-card h3 {
+            color: #333;
+            margin: 0 0 10px 0;
         }
         .confidence-badge {
             display: inline-block;
@@ -46,8 +65,9 @@
         .field-row {
             margin: 10px 0;
             padding: 10px;
-            background: white;
+            background: #f9f9f9;
             border-left: 3px solid #2196F3;
+            color: #333;
         }
         .field-label {
             font-weight: bold;
@@ -78,6 +98,7 @@
             cursor: pointer;
             font-size: 0.95em;
             transition: all 0.3s;
+            color: white;
         }
         .btn-approve {
             background: #4CAF50;
@@ -106,6 +127,10 @@
             border-radius: 4px;
             margin-top: 15px;
             display: none;
+            color: #333;
+        }
+        .edit-form h4 {
+            color: #333;
         }
         .form-group {
             margin: 10px 0;
@@ -114,6 +139,7 @@
             display: block;
             font-weight: bold;
             margin-bottom: 5px;
+            color: #333;
         }
         .form-group input,
         .form-group textarea {
@@ -122,6 +148,8 @@
             border: 1px solid #ddd;
             border-radius: 4px;
             box-sizing: border-box;
+            background: white;
+            color: #333;
         }
         .audit-trail {
             margin-top: 15px;
@@ -129,20 +157,34 @@
             background: #f5f5f5;
             border-radius: 4px;
             font-size: 0.85em;
+            color: #333;
+        }
+        .audit-trail strong {
+            color: #333;
         }
         .audit-entry {
             margin: 5px 0;
             padding: 5px;
             border-left: 2px solid #2196F3;
             padding-left: 10px;
+            color: #555;
+        }
+        .audit-entry strong {
+            color: #333;
+        }
+        .audit-entry em {
+            color: #777;
         }
         .empty-state {
             text-align: center;
             padding: 40px;
             color: #999;
+            background: white;
+            border-radius: 8px;
+            margin: 20px;
         }
         .empty-state h3 {
-            color: #666;
+            color: #333;
         }
         #loading {
             text-align: center;
