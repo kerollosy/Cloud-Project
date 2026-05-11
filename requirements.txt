@@ -19,8 +19,14 @@ peft>=0.13
 accelerate>=0.30.0
 sentencepiece>=0.2.0
 
+# Testing
+httpx>=0.27.0
+
 # Database
 beanie==1.25.0
 motor==3.3.2
+pymongo==4.6.3
+email-validator==2.3.0
+dnspython==2.8.0
 
 watchtower==3.4.0
