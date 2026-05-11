@@ -1,0 +1,9 @@
+Connect to instance: ssh -i "test.pem" ubuntu@35.180.188.136
+
+Build container: docker compose up --build -d
+Start container: docker compose up -d
+Show logs: sudo docker logs -f resume-extractor
+
+Stop container: docker stop resume-extractor mongodb-local
+Remove container: docker rm resume-extractor mongodb-local
+Delete volumes: docker system prune -a --volumes
