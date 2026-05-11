@@ -11,10 +11,35 @@
             color: #333;
         }
         
-        table { width: 90%; border-collapse: collapse; margin: 20px auto; }
+        table { width: 95%; border-collapse: collapse; margin: 20px auto; font-size: 0.9em; }
         th, td { border: 1px solid #ddd; padding: 12px; text-align: right; }
-        th { background-color: #f4f4f4; }
+        th { background-color: #f4f4f4; font-weight: bold; }
         tr:nth-child(even) { background-color: #fafafa; }
+
+        .status-badge {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 3px;
+            font-size: 0.85em;
+            font-weight: bold;
+        }
+        .status-auto-approved {
+            background: #d4edda;
+            color: #155724;
+        }
+        .status-pending-review {
+            background: #fff3cd;
+            color: #856404;
+        }
+        .status-reviewed {
+            background: #d1ecf1;
+            color: #0c5460;
+        }
+
+        .confidence-text {
+            font-size: 0.85em;
+            color: #666;
+        }
 
         .container {
             text-align: center;
@@ -29,9 +54,28 @@
             border-radius: 5px;
             font-family: sans-serif;
             transition: background-color 0.3s;
+            margin-right: 10px;
         }
         .back-btn:hover {
             background-color: #0056b3;
+        }
+        .review-btn {
+            background-color: #ffc107;
+            color: #333;
+            padding: 10px 20px;
+            text-decoration: none;
+            border-radius: 5px;
+            font-family: sans-serif;
+            transition: background-color 0.3s;
+        }
+        .review-btn:hover {
+            background-color: #e0a800;
+        }
+        .empty-msg {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+            font-size: 1.1em;
         }
     </style>
 </head>
@@ -45,14 +89,19 @@
                 <th>E-mail</th>
                 <th>Education</th>
                 <th>Skills</th>
+                <th>Status</th>
+                <th>Confidence</th>
             </tr>
         </thead>
         <tbody id="tableBody">
         </tbody>
     </table>
 
+    <div id="emptyState"></div>
+
     <div class="container">
         <a href="/" class="back-btn"> home </a>
+        <a href="/review-queue" class="review-btn"> 📋 Review Queue </a>
     </div>
 
     <script>
@@ -62,25 +111,44 @@
                 const data = await response.json();
                 
                 const tableBody = document.getElementById('tableBody');
+                const emptyState = document.getElementById('emptyState');
+                
+                if (!data || data.length === 0) {
+                    tableBody.innerHTML = '';
+                    emptyState.innerHTML = '<div class="empty-msg">No resumes uploaded yet. Go to home and upload a resume!</div>';
+                    return;
+                }
+
                 tableBody.innerHTML = '';
+                emptyState.innerHTML = '';
 
                 data.forEach(resume => {
+                    const conf = resume.confidence || {};
+                    const overallConf = ((conf.overall || 0) * 100).toFixed(0);
+                    const statusClass = `status-${(resume.status || 'auto-approved').replace(/-/g, '-')}`;
+                    
                     const row = `
                         <tr>
                             <td>${resume.name || 'not found'}</td>
                             <td>${resume.email || 'not found'}</td>
                             <td>${resume.education || 'not found'}</td>
                             <td>${resume.skills && resume.skills.length > 0 ? resume.skills.join(', ') : 'not found'}</td>
+                            <td><span class="status-badge ${statusClass}">${resume.status || 'auto-approved'}</span></td>
+                            <td><span class="confidence-text">${overallConf}%</span></td>
                         </tr>
                     `;
                     tableBody.innerHTML += row;
                 });
             } catch (error) {
-                console.error('Can not get data', error);
+                console.error('Error loading resumes:', error);
+                document.getElementById('emptyState').innerHTML = 
+                    '<div class="empty-msg">⚠️ Error loading resumes. Make sure the server is running.</div>';
             }
         }
 
         window.onload = loadResumes;
+        // Refresh every 10 seconds
+        setInterval(loadResumes, 10000);
     </script>
 </body>
 </html>

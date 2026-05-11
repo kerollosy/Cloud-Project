@@ -206,17 +206,18 @@ async def extract_fields(resume_text: str) -> dict:
         # Overall confidence is weighted average
         overall_conf = (name_conf * 0.25 + email_conf * 0.25 + edu_conf * 0.25 + skills_conf * 0.25)
 
+        # Convert numpy float32 to Python float for Pydantic serialization
         result = {
             "Name": buckets["Name"][0] if buckets["Name"] else "",
             "Email Address": buckets["Email Address"][0] if buckets["Email Address"] else "",
             "Skills": ", ".join(skills),
             "Education": "; ".join(buckets["Education"]),
             "confidence": {
-                "name": round(name_conf, 3),
-                "email": round(email_conf, 3),
-                "education": round(edu_conf, 3),
-                "skills": round(skills_conf, 3),
-                "overall": round(overall_conf, 3),
+                "name": float(round(name_conf, 3)),
+                "email": float(round(email_conf, 3)),
+                "education": float(round(edu_conf, 3)),
+                "skills": float(round(skills_conf, 3)),
+                "overall": float(round(overall_conf, 3)),
             }
         }
 
