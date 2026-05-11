@@ -1,23 +1,3 @@
-"""
-AI-powered resume field extractor.
-
-Loads a fine-tuned BERT + LoRA model for token classification (NER) and
-extracts Name, Email Address, Skills, and Education from raw resume text.
-
-Architecture (3-layer extraction stack):
-    1. Fine-tuned BERT (LoRA) for structural fields:
-         PERSON, EMAIL, DESIGNATION, EDUCATION, LOCATION
-    2. Regex for contact info (overrides the model for EMAIL since
-       pattern matching beats learning here).
-    3. Dictionary lookup for SKILL against a curated taxonomy
-       (resume-skill datasets are too noisy to learn from reliably).
-
-The public surface that main.py depends on is:
-    - load_model()
-    - unload_model()
-    - extract_fields(text) -> {Name, Email Address, Skills, Education}
-"""
-
 import os
 import re
 import asyncio
@@ -30,19 +10,12 @@ from app.utils.s3_helper import download_and_extract_model
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
 BASE_MODEL_ID = "bert-base-cased"
 ADAPTER_PATH = "/app/final-resume-model"
 
-# Long-document inference settings
 MAX_INPUT_TOKENS = 384
 STRIDE = 64
 
-# Map model entity types -> API schema keys
-# (DESIGNATION and LOCATION are extracted but not currently exposed in
-# the response; left here so it's easy to add later without retraining.)
 ENTITY_TO_FIELD = {
     "PERSON": "Name",
     "EMAIL": "Email Address",
@@ -51,11 +24,7 @@ ENTITY_TO_FIELD = {
 
 # Regex for the contact-info layer
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
-DATE_RANGE_RE = re.compile(r"^\s*\d{4}\s*[-–—]\s*\d{4}\s*$")  # e.g. "2013-2017"
-ALL_DIGITS_RE = re.compile(r"^[\d\s\-\–\—/().]+$")
 
-# Skill dictionary (small, MVP-grade — swap in ESCO/O*NET later if needed).
-# Lower-cased keys; multi-word skills are matched as whole-word phrases.
 SKILL_TAXONOMY: List[str] = [
     # Programming languages
     "python", "java", "javascript", "typescript", "c", "c++", "c#", "go",
@@ -87,7 +56,6 @@ SKILL_TAXONOMY: List[str] = [
     "rest api", "rest", "soap", "microservices", "agile", "scrum",
     "tdd", "unit testing", "selenium", "pytest", "junit",
 ]
-# Pre-compile a single alternation regex (longest first so multi-word skills win)
 _SKILL_PATTERN = re.compile(
     r"(?<![A-Za-z0-9+#.])(?:"
     + "|".join(sorted((re.escape(s) for s in SKILL_TAXONOMY), key=len, reverse=True))
@@ -96,9 +64,6 @@ _SKILL_PATTERN = re.compile(
 )
 
 
-# ---------------------------------------------------------------------------
-# Model singleton
-# ---------------------------------------------------------------------------
 class _ModelHolder:
     ner_pipeline: Optional[Pipeline] = None
     device: Optional[str] = None
@@ -119,7 +84,7 @@ def load_model() -> None:
 
     if torch.cuda.is_available():
         _holder.device = "cuda"
-        device_arg = 0                          # pipeline takes GPU index, not string
+        device_arg = 0
         logger.info("CUDA available - using GPU: %s", torch.cuda.get_device_name(0))
     else:
         _holder.device = "cpu"
@@ -130,7 +95,7 @@ def load_model() -> None:
         "token-classification",
         model=adapter_path,
         tokenizer=adapter_path,
-        aggregation_strategy="simple",          # merges B-/I- subwords, gives entity_group
+        aggregation_strategy="simple",
         device=device_arg,
     )
     logger.info("Resume extraction model ready on %s.", _holder.device)
@@ -143,27 +108,15 @@ def unload_model() -> None:
     logger.info("Model unloaded.")
 
 
-# ---------------------------------------------------------------------------
-# Inference: NER with sliding window + offset-mapping alignment
-# ---------------------------------------------------------------------------
 def _predict_entities(text: str) -> List[Tuple[str, int, int, str]]:
-    """
-    Run the HF pipeline on `text` with stride-based long-document handling.
-    Returns a list of (entity_type, start_char, end_char, span_text).
-
-    `stride=STRIDE` makes the pipeline tokenize with overlapping windows
-    (same as the manual sliding loop, but handled internally). Each result
-    already carries character-level `start`/`end` so downstream code is
-    unchanged.
-    """
     raw: List[dict] = _holder.ner_pipeline(
         text,
-        stride=STRIDE,                          # requires transformers >= 4.24
+        stride=STRIDE,
     )
 
     entities: List[Tuple[str, int, int, str]] = []
     for ent in raw:
-        entity_type = ent["entity_group"]       # e.g. "PERSON", "EMAIL", "EDUCATION"
+        entity_type = ent["entity_group"]
         start: int = ent["start"]
         end: int   = ent["end"]
         span: str  = text[start:end].strip()
@@ -173,24 +126,8 @@ def _predict_entities(text: str) -> List[Tuple[str, int, int, str]]:
     return entities
 
 
-# ---------------------------------------------------------------------------
-# Post-processing
-# ---------------------------------------------------------------------------
-def _is_garbage_person(span: str) -> bool:
-    """Reject obvious non-person spans the model sometimes mislabels."""
-    if not span or len(span) < 3:
-        return True
-    low = span.lower()
-    if DATE_RANGE_RE.match(span) or ALL_DIGITS_RE.match(span):
-        return True
-    blacklist = ("university", "college", "institute", "school", "company",
-                 "ltd", "inc", "llc", "gmbh", "corporation")
-    return any(b in low for b in blacklist)
-
-
 def _merge_contiguous(entities: List[Tuple[str, int, int, str]],
-                      text: str) -> List[Tuple[str, int, int, str]]:
-    """Merge same-type spans separated only by whitespace/punctuation."""
+                    text: str) -> List[Tuple[str, int, int, str]]:
     if not entities:
         return entities
     entities = sorted(entities, key=lambda x: x[1])
@@ -217,30 +154,17 @@ def _dedupe(values: List[str]) -> List[str]:
 
 def _extract_skills_from_taxonomy(text: str) -> List[str]:
     """Dictionary lookup for skills (the model doesn't predict SKILL)."""
-    found: Dict[str, str] = {}                                   # lower -> original casing
+    found: Dict[str, str] = {}
     for m in _SKILL_PATTERN.finditer(text):
         canon = m.group(0).lower()
         if canon not in found:
             found[canon] = m.group(0)
-    # Return canonical (taxonomy) casing for cleanliness
     canon_map = {s.lower(): s for s in SKILL_TAXONOMY}
     return [canon_map.get(k, v).title() if " " not in canon_map.get(k, v)
             else canon_map.get(k, v) for k, v in found.items()]
 
 
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
 async def extract_fields(resume_text: str) -> Dict[str, str]:
-    """
-    Run the 3-layer extraction stack and return:
-        {
-            "Name":          "Ahmed Tamer",
-            "Email Address": "ahmed@example.com",
-            "Skills":        "Python, SQL, FastAPI",
-            "Education":     "BS Computer Science; ..."
-        }
-    """
     if _holder.ner_pipeline is None:
         raise RuntimeError("Model is not loaded. Call load_model() at startup.")
 
@@ -248,7 +172,6 @@ async def extract_fields(resume_text: str) -> Dict[str, str]:
     resume_text = resume_text.encode("utf-8", errors="ignore").decode("utf-8")
 
     def _run() -> Dict[str, str]:
-        # Layer 1: NER
         raw = _predict_entities(resume_text)
         # print("Raw model output:", raw)
         raw = _merge_contiguous(raw, resume_text)
@@ -258,20 +181,15 @@ async def extract_fields(resume_text: str) -> Dict[str, str]:
             field = ENTITY_TO_FIELD.get(typ)
             if not field:
                 continue
-            if field == "Name" and _is_garbage_person(span):
-                continue
             buckets[field].append(span)
 
-        # Dedupe
         for k in buckets:
             buckets[k] = _dedupe(buckets[k])
 
-        # Layer 2: Email regex (overrides the model)
         regex_emails = _dedupe(EMAIL_RE.findall(resume_text))
         if regex_emails:
             buckets["Email Address"] = regex_emails
 
-        # Layer 3: Skills via taxonomy lookup
         skills = _extract_skills_from_taxonomy(resume_text)
 
         result = {
@@ -291,20 +209,11 @@ async def extract_fields(resume_text: str) -> Dict[str, str]:
     return await asyncio.to_thread(_run)
 
 
-# ---------------------------------------------------------------------------
-# Smoke tests (run with: python -m app.utils.ai_extractor --test)
-# ---------------------------------------------------------------------------
 if __name__ == "__main__":
     import sys
 
     if "--test" in sys.argv:
         print("Running unit tests for post-processing...\n")
-
-        # Garbage filter
-        assert _is_garbage_person("2013-2017")
-        assert _is_garbage_person("Stanford University")
-        assert not _is_garbage_person("Ahmed Tamer")
-        print("garbage filter: PASSED")
 
         # Skill taxonomy lookup
         text = "I work with Python, FastAPI and PostgreSQL daily. Also Machine Learning."
@@ -322,7 +231,7 @@ if __name__ == "__main__":
         # Merge contiguous
         merged = _merge_contiguous(
             [("DESIGNATION", 0, 6, "Senior"),
-             ("DESIGNATION", 7, 23, "Software Engineer")],
+            ("DESIGNATION", 7, 23, "Software Engineer")],
             "Senior Software Engineer",
         )
         assert merged == [("DESIGNATION", 0, 23, "Senior Software Engineer")]

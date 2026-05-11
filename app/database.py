@@ -9,10 +9,6 @@ logger = logging.getLogger(__name__)
 
 
 async def init_db():
-    """
-    Initialize MongoDB connection using Beanie ODM.
-    Called once at application startup via the FastAPI lifespan hook.
-    """
     mongo_url = os.getenv("MONGO_URL")
     db_name = os.getenv("DATABASE_NAME")
 

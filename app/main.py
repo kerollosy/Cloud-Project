@@ -56,9 +56,7 @@ if not all([MONGO_URL, DATABASE_NAME]):
     logger.warning("Missing MongoDB configuration - DB persistence disabled")
 
 
-# ---------------------------------------------------------------------------
-# Lifespan: load model on startup, release on shutdown
-# ---------------------------------------------------------------------------
+# load model on startup, release on shutdown
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
@@ -73,11 +71,11 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Could not initialize CloudWatch logging: {e}")
 
-    logger.info("Starting up – loading AI model ...")
+    logger.info("Starting up - loading AI model ...")
     load_model()
     await init_db()
     yield
-    logger.info("Shutting down – unloading AI model ...")
+    logger.info("Shutting down - unloading AI model ...")
     unload_model()
 
 
@@ -107,10 +105,6 @@ async def health_check(request: Request):
 
 @app.get("/api/v1/resumes")
 async def get_all_resumes():
-    """
-    Retrieve all stored resumes from MongoDB.
-    Returns an empty list if no resumes have been stored.
-    """
     try:
         resumes = await ResumeDocument.find_all().to_list()
         return resumes
@@ -129,10 +123,6 @@ async def view_resumes_page(request: Request):
 
 @app.post("/api/v1/extract", response_model=ExtractionResponse)
 async def extract_resume(file: UploadFile = File(...)):
-    """
-    Accepts a PDF or plain text resume, extracts text, runs AI inference,
-    and returns structured data (Name, Email, Skills, Education).
-    """
     is_pdf = file.filename.lower().endswith('.pdf')
     is_txt = file.filename.lower().endswith('.txt')
     
@@ -216,10 +206,6 @@ async def extract_resume(file: UploadFile = File(...)):
 
 
 if __name__ == "__main__":
-    """
-    Run basic tests for the resume extraction API.
-    Usage: python -m app.main --test
-    """
     import sys
     
     if "--test" in sys.argv:

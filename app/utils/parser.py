@@ -6,10 +6,6 @@ logger = logging.getLogger(__name__)
 
 
 def _extract_text_from_pdf_sync(file_bytes: bytes) -> str:
-    """
-    Extracts text from a PDF file byte stream using PyMuPDF.
-    Synchronous implementation - use extract_text_from_pdf() for async interface.
-    """
     extracted_text = ""
     try:
         doc = fitz.open(stream=file_bytes, filetype="pdf")
@@ -32,10 +28,6 @@ def _extract_text_from_pdf_sync(file_bytes: bytes) -> str:
 
 
 def _extract_text_from_txt_sync(file_bytes: bytes) -> str:
-    """
-    Extracts text from a plain text file.
-    Synchronous implementation - use extract_text_from_txt() for async interface.
-    """
     try:
         text = file_bytes.decode("utf-8", errors="strict")
         
@@ -50,16 +42,8 @@ def _extract_text_from_txt_sync(file_bytes: bytes) -> str:
 
 
 async def extract_text_from_pdf(file_bytes: bytes) -> str:
-    """
-    Async wrapper around PDF text extraction.
-    Offloads blocking I/O to a thread to prevent event loop blocking.
-    """
     return await asyncio.to_thread(_extract_text_from_pdf_sync, file_bytes)
 
 
 async def extract_text_from_txt(file_bytes: bytes) -> str:
-    """
-    Async wrapper around plain text extraction.
-    Offloads blocking I/O to a thread to prevent event loop blocking.
-    """
     return await asyncio.to_thread(_extract_text_from_txt_sync, file_bytes)
